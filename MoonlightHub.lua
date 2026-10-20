@@ -35,7 +35,7 @@ local WHITE = Color3.fromRGB(255, 255, 255)
 -- Settings (saved to a file when the executor supports it)
 --------------------------------------------------------------------------------
 
-local Settings = { Theme = "Dark", IconSize = 56, ShowFps = false, Places = {} }
+local Settings = { IconSize = 56, ShowFps = false, Places = {} }
 local saveSettings
 
 do
@@ -51,9 +51,6 @@ do
             local data = HttpService:JSONDecode(readfile(SETTINGS_FILE))
             if type(data) ~= "table" then
                 return
-            end
-            if data.Theme == "Dark" or data.Theme == "Light" then
-                Settings.Theme = data.Theme
             end
             if type(data.IconSize) == "number" then
                 Settings.IconSize = math.clamp(data.IconSize, 40, 96)
@@ -110,69 +107,26 @@ local function safeCall(fn, ...)
 end
 
 --------------------------------------------------------------------------------
--- Themes: Dark = anthracite + dark purple, Light = milk white + dark purple
+-- Palette (dark only: anthracite + dark purple)
 --------------------------------------------------------------------------------
 
-local Theme
-local applyTheme
-local ThemeBinds = setmetatable({}, { __mode = "k" })
-local ThemeCallbacks = {}
+local Theme = {
+    Background = Color3.fromRGB(26, 27, 33),
+    Panel = Color3.fromRGB(46, 43, 60),
+    Raised = Color3.fromRGB(64, 60, 84),
+    Border = Color3.fromRGB(14, 14, 18),
+    Text = Color3.fromRGB(238, 236, 246),
+    SubText = Color3.fromRGB(152, 148, 170),
+    Accent = Color3.fromRGB(104, 52, 168),
+    Accent2 = Color3.fromRGB(156, 104, 232),
+    AccentPressed = Color3.fromRGB(78, 36, 128),
+    OnAccent = Color3.fromRGB(255, 255, 255),
+    Off = Color3.fromRGB(84, 82, 102),
+    Moon = Color3.fromRGB(232, 222, 250),
+}
 
 local function T(key)
-    return { __theme = key }
-end
-
-do
-    local PALETTES = {
-        Dark = {
-            Background = Color3.fromRGB(34, 36, 40),
-            Panel = Color3.fromRGB(46, 48, 54),
-            Raised = Color3.fromRGB(60, 62, 70),
-            Border = Color3.fromRGB(22, 23, 26),
-            Text = Color3.fromRGB(236, 234, 242),
-            SubText = Color3.fromRGB(150, 148, 164),
-            Accent = Color3.fromRGB(104, 52, 168),
-            AccentPressed = Color3.fromRGB(78, 36, 128),
-            OnAccent = Color3.fromRGB(255, 255, 255),
-            Off = Color3.fromRGB(78, 78, 88),
-            TabSelected = Color3.fromRGB(64, 50, 90),
-            ScrollBar = Color3.fromRGB(100, 100, 112),
-            Moon = Color3.fromRGB(232, 222, 250),
-            IconStroke = Color3.fromRGB(104, 52, 168),
-        },
-        Light = {
-            Background = Color3.fromRGB(248, 245, 238),
-            Panel = Color3.fromRGB(237, 232, 224),
-            Raised = Color3.fromRGB(226, 220, 211),
-            Border = Color3.fromRGB(203, 196, 186),
-            Text = Color3.fromRGB(38, 26, 58),
-            SubText = Color3.fromRGB(118, 104, 136),
-            Accent = Color3.fromRGB(88, 40, 142),
-            AccentPressed = Color3.fromRGB(66, 28, 110),
-            OnAccent = Color3.fromRGB(255, 255, 255),
-            Off = Color3.fromRGB(198, 190, 180),
-            TabSelected = Color3.fromRGB(224, 214, 236),
-            ScrollBar = Color3.fromRGB(160, 150, 172),
-            Moon = Color3.fromRGB(88, 40, 142),
-            IconStroke = Color3.fromRGB(88, 40, 142),
-        },
-    }
-
-    Theme = PALETTES[Settings.Theme] or PALETTES.Dark
-
-    function applyTheme(name)
-        Theme = PALETTES[name] or PALETTES.Dark
-        for inst, props in pairs(ThemeBinds) do
-            for prop, key in pairs(props) do
-                pcall(function()
-                    inst[prop] = Theme[key]
-                end)
-            end
-        end
-        for _, callback in ipairs(ThemeCallbacks) do
-            safeCall(callback)
-        end
-    end
+    return Theme[key]
 end
 
 --------------------------------------------------------------------------------
@@ -241,13 +195,12 @@ local State = {
         Color = Color3.fromRGB(255, 69, 58),
         Fields = { Name = true, Distance = true, Health = true, Stand = true, Spec = true, Level = true },
     },
-    Farm = { Enabled = false, Speed = 800, Priority = "Distance", Selected = {} },
+    Farm = { Enabled = false, Speed = 150, Priority = "Distance", Humanize = true, Selected = {} },
     Sell = { Enabled = false, Interval = 15, ProtectRare = true, Selected = {} },
     Buy = { Enabled = false, Target = 5, Price = 75000 },
     Utils = { AntiAfk = true, AutoPlay = true, FarmScreen = false },
     Walk = { Enabled = false, Speed = 32 },
     Fly = { Enabled = false, Speed = 60 },
-    Teleport = { Speed = 1500 },
     World = { Fullbright = false, NoFog = false, Time = false, TimeValue = 14, Fov = false, FovValue = 90 },
     FlightBusy = false,
 }
@@ -271,10 +224,6 @@ local function create(className, props, children)
         for key, value in pairs(props) do
             if key == "Parent" then
                 parent = value
-            elseif type(value) == "table" and value.__theme then
-                ThemeBinds[inst] = ThemeBinds[inst] or {}
-                ThemeBinds[inst][key] = value.__theme
-                inst[key] = Theme[value.__theme]
             else
                 inst[key] = value
             end
@@ -299,12 +248,33 @@ local function pill()
     return create("UICorner", { CornerRadius = UDim.new(1, 0) })
 end
 
-local function stroke(color, thickness)
+local function stroke(color, thickness, transparency)
     return create("UIStroke", {
         Color = color,
         Thickness = thickness,
+        Transparency = transparency or 0,
         ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
     })
+end
+
+-- Soft purple outline whose gradient slowly rotates (cheap, one looping tween).
+local function gradientStroke(thickness)
+    local line = stroke(WHITE, thickness, 0)
+    local gradient = create("UIGradient", {
+        Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Theme.Accent2),
+            ColorSequenceKeypoint.new(0.5, Theme.Accent),
+            ColorSequenceKeypoint.new(1, Theme.Accent2),
+        }),
+        Rotation = 0,
+        Parent = line,
+    })
+    TweenService:Create(
+        gradient,
+        TweenInfo.new(7, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1),
+        { Rotation = 360 }
+    ):Play()
+    return line
 end
 
 local function newLabel(props)
@@ -443,17 +413,17 @@ local Loader = (function()
     local card = create("CanvasGroup", {
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.fromScale(0.5, 0.5),
-        Size = UDim2.fromOffset(280, 170),
+        Size = UDim2.fromOffset(300, 180),
         BackgroundColor3 = T("Background"),
         BorderSizePixel = 0,
         GroupTransparency = 1,
         Parent = gui,
-    }, { corner(16), stroke(T("IconStroke"), 2), scale })
+    }, { corner(20), gradientStroke(2), scale })
 
     local moonBox = create("Frame", {
         AnchorPoint = Vector2.new(0.5, 0),
-        Position = UDim2.new(0.5, 0, 0, 16),
-        Size = UDim2.fromOffset(56, 56),
+        Position = UDim2.new(0.5, 0, 0, 18),
+        Size = UDim2.fromOffset(60, 60),
         BackgroundTransparency = 1,
         Parent = card,
     })
@@ -477,16 +447,16 @@ local Loader = (function()
     }, { pill() })
 
     newLabel({
-        Position = UDim2.fromOffset(0, 80),
-        Size = UDim2.new(1, 0, 0, 22),
+        Position = UDim2.fromOffset(0, 86),
+        Size = UDim2.new(1, 0, 0, 24),
         Text = HUB_NAME,
         Font = Enum.Font.GothamBold,
-        TextSize = 17,
+        TextSize = 18,
         TextXAlignment = Enum.TextXAlignment.Center,
         Parent = card,
     })
     local status = newLabel({
-        Position = UDim2.fromOffset(0, 106),
+        Position = UDim2.fromOffset(0, 112),
         Size = UDim2.new(1, 0, 0, 18),
         Text = "Starting",
         TextSize = 12,
@@ -496,33 +466,43 @@ local Loader = (function()
     })
     local rail = create("Frame", {
         AnchorPoint = Vector2.new(0.5, 0),
-        Position = UDim2.new(0.5, 0, 0, 138),
-        Size = UDim2.new(1, -60, 0, 6),
+        Position = UDim2.new(0.5, 0, 0, 146),
+        Size = UDim2.new(1, -64, 0, 6),
         BackgroundColor3 = T("Off"),
+        BackgroundTransparency = 0.4,
         BorderSizePixel = 0,
         Parent = card,
     }, { pill() })
-    local fill = create("Frame", {
+    create("Frame", {
+        Name = "Fill",
         Size = UDim2.fromScale(0, 1),
-        BackgroundColor3 = T("Accent"),
+        BackgroundColor3 = WHITE,
         BorderSizePixel = 0,
         Parent = rail,
-    }, { pill() })
+    }, {
+        pill(),
+        create("UIGradient", {
+            Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, T("Accent")),
+                ColorSequenceKeypoint.new(1, T("Accent2")),
+            }),
+        }),
+    })
+    local fill = rail.Fill
 
     local errorLabel = newLabel({
-        Position = UDim2.fromOffset(14, 130),
-        Size = UDim2.new(1, -28, 0, 100),
+        Position = UDim2.fromOffset(16, 134),
+        Size = UDim2.new(1, -32, 0, 100),
         TextSize = 11,
         TextWrapped = true,
         TextYAlignment = Enum.TextYAlignment.Top,
-        TextColor3 = T("Text"),
         Visible = false,
         Parent = card,
     })
     local closeButton = create("TextButton", {
         AnchorPoint = Vector2.new(0.5, 0),
-        Position = UDim2.new(0.5, 0, 0, 236),
-        Size = UDim2.new(1, -60, 0, 30),
+        Position = UDim2.new(0.5, 0, 0, 240),
+        Size = UDim2.new(1, -64, 0, 30),
         BackgroundColor3 = T("Accent"),
         BorderSizePixel = 0,
         AutoButtonColor = false,
@@ -532,31 +512,31 @@ local Loader = (function()
         TextColor3 = T("OnAccent"),
         Visible = false,
         Parent = card,
-    }, { corner(8) })
+    }, { corner(10) })
 
     local pulseTween = TweenService:Create(
         pulse,
-        TweenInfo.new(0.9, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+        TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
         { Scale = 1.1 }
     )
     pulseTween:Play()
-    TweenService:Create(card, TweenInfo.new(0.25, Enum.EasingStyle.Quad), { GroupTransparency = 0 }):Play()
-    TweenService:Create(scale, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+    TweenService:Create(card, TweenInfo.new(0.3, Enum.EasingStyle.Quad), { GroupTransparency = 0 }):Play()
+    TweenService:Create(scale, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
 
     function api.Step(fraction, text)
         status.Text = text
-        TweenService:Create(fill, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        TweenService:Create(fill, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
             Size = UDim2.fromScale(math.clamp(fraction, 0, 1), 1),
         }):Play()
     end
 
     function api.Finish()
         api.Step(1, "Ready")
-        task.wait(0.25)
+        task.wait(0.6)
         pulseTween:Cancel()
-        TweenService:Create(card, TweenInfo.new(0.2, Enum.EasingStyle.Quad), { GroupTransparency = 1 }):Play()
-        TweenService:Create(scale, TweenInfo.new(0.2, Enum.EasingStyle.Quad), { Scale = 0.95 }):Play()
-        task.wait(0.22)
+        TweenService:Create(card, TweenInfo.new(0.25, Enum.EasingStyle.Quad), { GroupTransparency = 1 }):Play()
+        TweenService:Create(scale, TweenInfo.new(0.25, Enum.EasingStyle.Quad), { Scale = 0.95 }):Play()
+        task.wait(0.27)
         gui:Destroy()
     end
 
@@ -569,7 +549,7 @@ local Loader = (function()
         errorLabel.Visible = true
         closeButton.Visible = true
         TweenService:Create(card, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
-            Size = UDim2.fromOffset(320, 282),
+            Size = UDim2.fromOffset(330, 290),
         }):Play()
         closeButton.MouseButton1Click:Connect(function()
             gui:Destroy()
@@ -1230,13 +1210,14 @@ function Build.move()
 end
 
 --------------------------------------------------------------------------------
--- Module: flight (item farm and teleports, TweenService only)
+-- Module: flight (item farm via TweenService, instant teleports)
 --------------------------------------------------------------------------------
 
 function Build.flight()
     local Esp, Move = Mod.esp, Mod.move
     local Items = Esp.Items
     local itemAlive, refreshItems = Esp.itemAlive, Esp.refreshItems
+    local rng = Random.new()
 
     local api = { statusLabel = nil, tpLabel = nil }
     local activeTween = nil
@@ -1258,6 +1239,15 @@ function Build.flight()
     local fireProximity = nil
     if type(fireproximityprompt) == "function" then
         fireProximity = fireproximityprompt
+    end
+
+    -- With "safe mode" on, waits are randomized so the timing is not machine-perfect.
+    local function pause(minSeconds, maxSeconds)
+        if State.Farm.Humanize then
+            task.wait(rng:NextNumber(minSeconds, maxSeconds))
+        else
+            task.wait(minSeconds)
+        end
     end
 
     local function pickTarget(originPos, failures, priority)
@@ -1289,16 +1279,14 @@ function Build.flight()
         return best, bestDist
     end
 
-    -- Movement is strictly TweenService, duration = distance / speed.
-    local function flyTo(position, rec, speed)
+    -- One tween segment, duration = distance / speed. Returns how it ended.
+    local function tweenSegment(position, rec, speed, myId)
         local root = getRoot()
         if not root then
             return "nochar"
         end
-        flightId += 1
-        local myId = flightId
         local distance = (root.Position - position).Magnitude
-        local duration = math.max(distance / (speed or State.Farm.Speed), 0.05)
+        local duration = math.max(distance / speed, 0.05)
         local goal = CFrame.new(position) * root.CFrame.Rotation
         local tween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), { CFrame = goal })
         activeTween = tween
@@ -1337,6 +1325,42 @@ function Build.flight()
         return result
     end
 
+    -- Farm movement is strictly TweenService. In safe mode a long path is split into
+    -- several short segments with small offsets and slightly different speeds.
+    local function flyTo(position, rec, speed)
+        local root = getRoot()
+        if not root then
+            return "nochar"
+        end
+        flightId += 1
+        local myId = flightId
+        local baseSpeed = math.max(speed or State.Farm.Speed, 50)
+        local startPos = root.Position
+        local total = (position - startPos).Magnitude
+        local segments = 1
+        if State.Farm.Humanize and total > 70 then
+            segments = math.clamp(math.floor(total / 80), 2, 6)
+        end
+        for index = 1, segments do
+            local target = startPos:Lerp(position, index / segments)
+            local segmentSpeed = baseSpeed
+            if State.Farm.Humanize then
+                if index < segments then
+                    target += Vector3.new(rng:NextNumber(-3, 3), rng:NextNumber(-1, 1), rng:NextNumber(-3, 3))
+                end
+                segmentSpeed = baseSpeed * rng:NextNumber(0.88, 1.12)
+            end
+            local result = tweenSegment(target, rec, segmentSpeed, myId)
+            if result ~= "arrived" then
+                return result
+            end
+            if State.Farm.Humanize and index < segments then
+                task.wait(rng:NextNumber(0.03, 0.12))
+            end
+        end
+        return "arrived"
+    end
+
     local function pickUp(rec)
         local prompt = rec.prompt
         if prompt and prompt.Parent and fireProximity then
@@ -1356,6 +1380,14 @@ function Build.flight()
         VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
     end
 
+    local function approachPoint(rec)
+        local point = rec.part.Position + PICKUP_HOVER_OFFSET
+        if State.Farm.Humanize then
+            point += Vector3.new(rng:NextNumber(-1.2, 1.2), 0, rng:NextNumber(-1.2, 1.2))
+        end
+        return point
+    end
+
     local function farmStep(failures)
         local root = getRoot()
         if not root then
@@ -1371,7 +1403,7 @@ function Build.flight()
             return
         end
         setStatus(string.format("flying to %s (%d studs)", target.label, math.floor(dist)))
-        local result = flyTo(target.part.Position + PICKUP_HOVER_OFFSET, target, State.Farm.Speed)
+        local result = flyTo(approachPoint(target), target, State.Farm.Speed)
         if result == "gone" then
             setStatus("item disappeared, retargeting")
             return
@@ -1380,8 +1412,9 @@ function Build.flight()
             return
         end
         setStatus("picking up " .. target.label)
+        pause(0.15, 0.45)
         pickUp(target)
-        task.wait(0.6)
+        pause(0.6, 1.1)
         if itemAlive(target) then
             local failure = failures[target.inst]
             if not failure then
@@ -1396,6 +1429,7 @@ function Build.flight()
         else
             Stats.Picked += 1
             failures[target.inst] = nil
+            pause(0.1, 0.7)
         end
     end
 
@@ -1463,7 +1497,7 @@ function Build.flight()
                 end
                 setStatus(string.format("flying to %s (%d studs)", target.label, math.floor(dist)))
                 Move.acquireHover()
-                local result = flyTo(target.part.Position + PICKUP_HOVER_OFFSET, target, State.Farm.Speed)
+                local result = flyTo(approachPoint(target), target, State.Farm.Speed)
                 Move.releaseHover()
                 if result == "arrived" then
                     setStatus("arrived at " .. target.label)
@@ -1478,32 +1512,26 @@ function Build.flight()
         end)
     end
 
-    function api.teleportTo(position, label)
-        if State.FlightBusy then
-            api.setTpStatus("busy, wait for the current flight")
-            return
-        end
+    -- Instant teleport (no tween). The game may rubber-band it back; we report that.
+    function api.teleportInstant(position, label)
         if State.Farm.Enabled then
             api.setTpStatus("stop auto farm first")
             return
         end
-        if not getRoot() then
+        local char = LocalPlayer.Character
+        local root = getRoot()
+        if not (char and root) then
             api.setTpStatus("waiting for character")
             return
         end
-        State.FlightBusy = true
-        task.spawn(function()
-            local ok, err = pcall(function()
-                api.setTpStatus("flying to " .. label)
-                Move.acquireHover()
-                local result = flyTo(position, nil, State.Teleport.Speed)
-                Move.releaseHover()
-                api.setTpStatus(result == "arrived" and ("arrived at " .. label) or ("flight " .. result))
-            end)
-            if not ok then
-                warn("[" .. HUB_NAME .. "] teleport: " .. tostring(err))
+        root.AssemblyLinearVelocity = Vector3.zero
+        char:PivotTo(CFrame.new(position) * root.CFrame.Rotation)
+        api.setTpStatus("teleported to " .. label)
+        task.delay(0.6, function()
+            local now = getRoot()
+            if alive and now and (now.Position - position).Magnitude > 25 then
+                api.setTpStatus("rubber-banded back, the anticheat rejected the teleport")
             end
-            State.FlightBusy = false
         end)
     end
 
@@ -2208,7 +2236,7 @@ function Build.world()
 end
 
 --------------------------------------------------------------------------------
--- Module: UI kit (drag helpers and controls)
+-- Module: UI kit (drag helpers, cards and controls)
 --------------------------------------------------------------------------------
 
 function Build.kit()
@@ -2294,52 +2322,103 @@ function Build.kit()
         end))
     end
 
-    function kit.nextOrder(page)
-        layoutCounters[page] = (layoutCounters[page] or 0) + 1
-        return layoutCounters[page]
+    local function nextOrder(parent)
+        layoutCounters[parent] = (layoutCounters[parent] or 0) + 1
+        return layoutCounters[parent]
     end
-    local nextOrder = kit.nextOrder
+    kit.nextOrder = nextOrder
 
-    function kit.addSection(page, text)
-        return newLabel({
-            Size = UDim2.new(1, 0, 0, 22),
-            Text = string.upper(text),
-            Font = Enum.Font.GothamBold,
-            TextSize = 11,
-            TextColor3 = T("SubText"),
-            LayoutOrder = nextOrder(page),
-            Parent = page,
+    local function scrollerOf(parent)
+        if parent:IsA("ScrollingFrame") then
+            return parent
+        end
+        return parent:FindFirstAncestorOfClass("ScrollingFrame") or { ScrollingEnabled = true }
+    end
+
+    local function accentGradient(inst, rotation)
+        create("UIGradient", {
+            Rotation = rotation or 0,
+            Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, T("Accent")),
+                ColorSequenceKeypoint.new(1, T("Accent2")),
+            }),
+            Parent = inst,
         })
     end
 
-    function kit.addLabel(page, text)
+    local function newRow(parent, height)
+        return create("Frame", {
+            Size = UDim2.new(1, 0, 0, height),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            LayoutOrder = nextOrder(parent),
+            Parent = parent,
+        })
+    end
+
+    -- Card: a soft glass panel that groups related controls.
+    function kit.addCard(page, title)
+        local card = create("Frame", {
+            Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundColor3 = T("Panel"),
+            BackgroundTransparency = 0.38,
+            BorderSizePixel = 0,
+            LayoutOrder = nextOrder(page),
+            Parent = page,
+        }, {
+            corner(14),
+            stroke(WHITE, 1, 0.9),
+            create("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
+            create("UIPadding", {
+                PaddingTop = UDim.new(0, 10),
+                PaddingBottom = UDim.new(0, 10),
+                PaddingLeft = UDim.new(0, 12),
+                PaddingRight = UDim.new(0, 12),
+            }),
+        })
+        if title then
+            local header = newRow(card, 20)
+            local bar = create("Frame", {
+                Position = UDim2.fromOffset(0, 4),
+                Size = UDim2.fromOffset(4, 12),
+                BackgroundColor3 = WHITE,
+                BorderSizePixel = 0,
+                Parent = header,
+            }, { pill() })
+            accentGradient(bar, 90)
+            newLabel({
+                Position = UDim2.fromOffset(12, 0),
+                Size = UDim2.new(1, -12, 1, 0),
+                Text = string.upper(title),
+                Font = Enum.Font.GothamBold,
+                TextSize = 11,
+                TextColor3 = T("Accent2"),
+                Parent = header,
+            })
+        end
+        return card
+    end
+
+    function kit.addLabel(parent, text)
         return newLabel({
-            Size = UDim2.new(1, 0, 0, 24),
+            Size = UDim2.new(1, 0, 0, 18),
+            AutomaticSize = Enum.AutomaticSize.Y,
             Text = text,
             TextColor3 = T("SubText"),
             TextSize = 12,
             TextWrapped = true,
-            LayoutOrder = nextOrder(page),
-            Parent = page,
+            LayoutOrder = nextOrder(parent),
+            Parent = parent,
         })
     end
 
-    local function newRow(page, height)
-        return create("Frame", {
-            Size = UDim2.new(1, 0, 0, height),
-            BackgroundColor3 = T("Panel"),
-            BorderSizePixel = 0,
-            LayoutOrder = nextOrder(page),
-            Parent = page,
-        }, { corner(8) })
-    end
-
-    function kit.addToggle(page, text, default, callback)
-        local row = newRow(page, 40)
-        newLabel({ Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -70, 1, 0), Text = text, Parent = row })
+    function kit.addToggle(parent, text, default, callback)
+        local row = newRow(parent, 34)
+        newLabel({ Size = UDim2.new(1, -56, 1, 0), Text = text, Parent = row })
         local trackFrame = create("Frame", {
             AnchorPoint = Vector2.new(1, 0.5),
-            Position = UDim2.new(1, -12, 0.5, 0),
+            Position = UDim2.new(1, 0, 0.5, 0),
             Size = UDim2.fromOffset(40, 22),
             BorderSizePixel = 0,
             Parent = row,
@@ -2360,9 +2439,9 @@ function Build.kit()
         })
 
         local value = default
-        local info = TweenInfo.new(0.15, Enum.EasingStyle.Quad)
+        local info = TweenInfo.new(0.18, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
         local function render(animate)
-            local trackColor = value and Theme.Accent or Theme.Off
+            local trackColor = value and T("Accent") or T("Off")
             local knobPos = value and UDim2.new(1, -20, 0.5, 0) or UDim2.new(0, 2, 0.5, 0)
             if animate then
                 TweenService:Create(trackFrame, info, { BackgroundColor3 = trackColor }):Play()
@@ -2373,9 +2452,6 @@ function Build.kit()
             end
         end
         render(false)
-        table.insert(ThemeCallbacks, function()
-            render(false)
-        end)
 
         hit.MouseButton1Click:Connect(function()
             value = not value
@@ -2393,43 +2469,46 @@ function Build.kit()
         }
     end
 
-    function kit.addSlider(page, text, min, max, default, step, suffix, callback)
-        local row = newRow(page, 58)
-        newLabel({ Position = UDim2.fromOffset(12, 6), Size = UDim2.new(0.6, 0, 0, 20), Text = text, Parent = row })
+    function kit.addSlider(parent, text, min, max, default, step, suffix, callback)
+        local row = newRow(parent, 46)
+        newLabel({ Size = UDim2.new(0.6, 0, 0, 20), Text = text, Parent = row })
         local valueLabel = newLabel({
             AnchorPoint = Vector2.new(1, 0),
-            Position = UDim2.new(1, -12, 0, 6),
+            Position = UDim2.new(1, 0, 0, 0),
             Size = UDim2.new(0.4, 0, 0, 20),
-            TextColor3 = T("SubText"),
+            Font = Enum.Font.GothamBold,
+            TextColor3 = T("Accent2"),
             TextXAlignment = Enum.TextXAlignment.Right,
             Parent = row,
         })
         local rail = create("Frame", {
-            Position = UDim2.new(0, 12, 0, 38),
-            Size = UDim2.new(1, -24, 0, 6),
+            Position = UDim2.new(0, 0, 0, 30),
+            Size = UDim2.new(1, 0, 0, 5),
             BackgroundColor3 = T("Off"),
+            BackgroundTransparency = 0.35,
             BorderSizePixel = 0,
             Parent = row,
         }, { pill() })
         local fill = create("Frame", {
             Size = UDim2.fromScale(0, 1),
-            BackgroundColor3 = T("Accent"),
+            BackgroundColor3 = WHITE,
             BorderSizePixel = 0,
             Parent = rail,
         }, { pill() })
+        accentGradient(fill, 0)
         local knob = create("Frame", {
             AnchorPoint = Vector2.new(0.5, 0.5),
             Position = UDim2.fromScale(0, 0.5),
-            Size = UDim2.fromOffset(16, 16),
+            Size = UDim2.fromOffset(14, 14),
             BackgroundColor3 = WHITE,
             BorderSizePixel = 0,
             ZIndex = 2,
             Parent = rail,
-        }, { pill(), stroke(T("Accent"), 1.5) })
+        }, { pill(), stroke(T("Accent2"), 2, 0) })
         local hit = create("TextButton", {
             BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(0, 26),
-            Size = UDim2.new(1, 0, 0, 32),
+            Position = UDim2.fromOffset(0, 18),
+            Size = UDim2.new(1, 0, 0, 28),
             Text = "",
             AutoButtonColor = false,
             Parent = row,
@@ -2445,48 +2524,48 @@ function Build.kit()
                 safeCall(callback, value)
             end
         end
-        trackDrag(hit, page, function(pos)
+        trackDrag(hit, scrollerOf(parent), function(pos)
             local alpha = math.clamp((pos.X - rail.AbsolutePosition.X) / math.max(rail.AbsoluteSize.X, 1), 0, 1)
             setValue(min + alpha * (max - min), true)
         end)
         setValue(default, false)
     end
 
-    function kit.addColorPicker(page, text, default, callback)
+    function kit.addColorPicker(parent, text, default, callback)
         local h, s, v = Color3.toHSV(default)
-        local container = newRow(page, 40)
+        local container = newRow(parent, 34)
         container.ClipsDescendants = true
-        newLabel({ Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -70, 0, 40), Text = text, Parent = container })
+        newLabel({ Size = UDim2.new(1, -50, 0, 34), Text = text, Parent = container })
         local swatch = create("Frame", {
             AnchorPoint = Vector2.new(1, 0),
-            Position = UDim2.new(1, -12, 0, 10),
+            Position = UDim2.new(1, 0, 0, 7),
             Size = UDim2.fromOffset(34, 20),
             BackgroundColor3 = default,
             BorderSizePixel = 0,
             Parent = container,
-        }, { corner(6), stroke(T("Border"), 1) })
+        }, { corner(8), stroke(WHITE, 1, 0.75) })
         local headerHit = create("TextButton", {
             BackgroundTransparency = 1,
-            Size = UDim2.new(1, 0, 0, 40),
+            Size = UDim2.new(1, 0, 0, 34),
             Text = "",
             AutoButtonColor = false,
             Parent = container,
         })
 
         local svBox = create("Frame", {
-            Position = UDim2.fromOffset(12, 48),
-            Size = UDim2.new(1, -56, 0, 100),
+            Position = UDim2.fromOffset(0, 40),
+            Size = UDim2.new(1, -34, 0, 100),
             BackgroundColor3 = Color3.fromHSV(h, 1, 1),
             BorderSizePixel = 0,
             Parent = container,
-        }, { corner(6) })
+        }, { corner(8) })
         create("Frame", {
             Size = UDim2.fromScale(1, 1),
             BackgroundColor3 = Color3.new(1, 1, 1),
             BorderSizePixel = 0,
             Parent = svBox,
         }, {
-            corner(6),
+            corner(8),
             create("UIGradient", {
                 Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
             }),
@@ -2497,7 +2576,7 @@ function Build.kit()
             BorderSizePixel = 0,
             Parent = svBox,
         }, {
-            corner(6),
+            corner(8),
             create("UIGradient", {
                 Rotation = 90,
                 Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0) }),
@@ -2510,17 +2589,17 @@ function Build.kit()
             BorderSizePixel = 0,
             ZIndex = 3,
             Parent = svBox,
-        }, { pill(), stroke(Color3.new(0, 0, 0), 1.5) })
+        }, { pill(), stroke(Color3.new(0, 0, 0), 1.5, 0) })
 
         local hueBar = create("Frame", {
             AnchorPoint = Vector2.new(1, 0),
-            Position = UDim2.new(1, -12, 0, 48),
-            Size = UDim2.fromOffset(24, 100),
+            Position = UDim2.new(1, 0, 0, 40),
+            Size = UDim2.fromOffset(22, 100),
             BackgroundColor3 = Color3.new(1, 1, 1),
             BorderSizePixel = 0,
             Parent = container,
         }, {
-            corner(6),
+            corner(8),
             create("UIGradient", {
                 Rotation = 90,
                 Color = ColorSequence.new({
@@ -2541,7 +2620,7 @@ function Build.kit()
             BorderSizePixel = 0,
             ZIndex = 3,
             Parent = hueBar,
-        }, { corner(3), stroke(Color3.new(0, 0, 0), 1.5) })
+        }, { corner(3), stroke(Color3.new(0, 0, 0), 1.5, 0) })
 
         local function apply(fire)
             local color = Color3.fromHSV(h, s, v)
@@ -2555,12 +2634,13 @@ function Build.kit()
         end
         apply(false)
 
-        trackDrag(svBox, page, function(pos)
+        local scroller = scrollerOf(parent)
+        trackDrag(svBox, scroller, function(pos)
             s = math.clamp((pos.X - svBox.AbsolutePosition.X) / math.max(svBox.AbsoluteSize.X, 1), 0, 1)
             v = 1 - math.clamp((pos.Y - svBox.AbsolutePosition.Y) / math.max(svBox.AbsoluteSize.Y, 1), 0, 1)
             apply(true)
         end)
-        trackDrag(hueBar, page, function(pos)
+        trackDrag(hueBar, scroller, function(pos)
             h = math.clamp((pos.Y - hueBar.AbsolutePosition.Y) / math.max(hueBar.AbsoluteSize.Y, 1), 0, 0.999)
             apply(true)
         end)
@@ -2568,22 +2648,22 @@ function Build.kit()
         local expanded = false
         headerHit.MouseButton1Click:Connect(function()
             expanded = not expanded
-            TweenService:Create(container, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {
-                Size = UDim2.new(1, 0, 0, expanded and 160 or 40),
+            TweenService:Create(container, TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                Size = UDim2.new(1, 0, 0, expanded and 148 or 34),
             }):Play()
         end)
     end
 
     -- Header shared by all dropdown variants. Returns container, valueLabel, arrow, hit.
-    local function dropdownHeader(page, text, valueText)
-        local container = newRow(page, 40)
+    local function dropdownHeader(parent, text, valueText)
+        local container = newRow(parent, 34)
         container.ClipsDescendants = true
-        newLabel({ Position = UDim2.fromOffset(12, 0), Size = UDim2.new(0.45, 0, 0, 40), Text = text, Parent = container })
+        newLabel({ Size = UDim2.new(0.5, 0, 0, 34), Text = text, Parent = container })
         local valueLabel = newLabel({
             AnchorPoint = Vector2.new(1, 0),
-            Position = UDim2.new(1, -30, 0, 0),
-            Size = UDim2.new(0.55, -30, 0, 40),
-            TextColor3 = T("SubText"),
+            Position = UDim2.new(1, -18, 0, 0),
+            Size = UDim2.new(0.5, -18, 0, 34),
+            TextColor3 = T("Accent2"),
             TextXAlignment = Enum.TextXAlignment.Right,
             TextTruncate = Enum.TextTruncate.AtEnd,
             Text = valueText,
@@ -2591,8 +2671,8 @@ function Build.kit()
         })
         local arrow = newLabel({
             AnchorPoint = Vector2.new(1, 0),
-            Position = UDim2.new(1, -10, 0, 0),
-            Size = UDim2.fromOffset(16, 40),
+            Position = UDim2.new(1, 0, 0, 0),
+            Size = UDim2.fromOffset(14, 34),
             Text = ">",
             Font = Enum.Font.GothamBold,
             TextColor3 = T("SubText"),
@@ -2601,7 +2681,7 @@ function Build.kit()
         })
         local hit = create("TextButton", {
             BackgroundTransparency = 1,
-            Size = UDim2.new(1, 0, 0, 40),
+            Size = UDim2.new(1, 0, 0, 34),
             Text = "",
             AutoButtonColor = false,
             Parent = container,
@@ -2610,36 +2690,37 @@ function Build.kit()
     end
 
     local function expandTo(container, arrow, expanded, height)
-        TweenService:Create(container, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {
-            Size = UDim2.new(1, 0, 0, expanded and height or 40),
+        TweenService:Create(container, TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+            Size = UDim2.new(1, 0, 0, expanded and height or 34),
         }):Play()
-        TweenService:Create(arrow, TweenInfo.new(0.18), { Rotation = expanded and 90 or 0 }):Play()
+        TweenService:Create(arrow, TweenInfo.new(0.2), { Rotation = expanded and 90 or 0 }):Play()
     end
 
-    function kit.addDropdown(page, text, options, default, callback)
+    function kit.addDropdown(parent, text, options, default, callback)
         local rowHeight = 30
-        local container, valueLabel, arrow, hit = dropdownHeader(page, text, default)
+        local container, valueLabel, arrow, hit = dropdownHeader(parent, text, default)
         local selected = default
         local buttons = {}
         local function render()
             valueLabel.Text = selected
             for option, button in pairs(buttons) do
                 local isSelected = option == selected
-                button.BackgroundColor3 = isSelected and Theme.Accent or Theme.Raised
-                button.TextColor3 = isSelected and Theme.OnAccent or Theme.Text
+                button.BackgroundColor3 = isSelected and T("Accent") or T("Raised")
+                button.BackgroundTransparency = isSelected and 0 or 0.5
             end
         end
         for index, option in ipairs(options) do
             buttons[option] = create("TextButton", {
-                Position = UDim2.fromOffset(8, 40 + (index - 1) * rowHeight),
-                Size = UDim2.new(1, -16, 0, rowHeight - 4),
+                Position = UDim2.fromOffset(0, 38 + (index - 1) * rowHeight),
+                Size = UDim2.new(1, 0, 0, rowHeight - 4),
                 BorderSizePixel = 0,
                 AutoButtonColor = false,
                 Text = option,
                 Font = Enum.Font.GothamMedium,
                 TextSize = 13,
+                TextColor3 = T("Text"),
                 Parent = container,
-            }, { corner(6) })
+            }, { corner(8) })
             buttons[option].MouseButton1Click:Connect(function()
                 selected = option
                 render()
@@ -2647,106 +2728,24 @@ function Build.kit()
             end)
         end
         render()
-        table.insert(ThemeCallbacks, render)
 
         local expanded = false
         hit.MouseButton1Click:Connect(function()
             expanded = not expanded
-            expandTo(container, arrow, expanded, 40 + #options * rowHeight + 6)
+            expandTo(container, arrow, expanded, 38 + #options * rowHeight + 4)
         end)
     end
 
-    -- Dropdown whose options are rebuilt every time it opens (teleport targets).
-    function kit.addDynamicDropdown(page, text, getOptions)
-        local maxList = 150
-        local container, valueLabel, arrow, hit = dropdownHeader(page, text, "Select")
-        local list = create("ScrollingFrame", {
-            Position = UDim2.fromOffset(8, 44),
-            Size = UDim2.new(1, -16, 0, 30),
-            BackgroundTransparency = 1,
-            BorderSizePixel = 0,
-            CanvasSize = UDim2.new(),
-            AutomaticCanvasSize = Enum.AutomaticSize.Y,
-            ScrollBarThickness = 3,
-            ScrollBarImageColor3 = T("ScrollBar"),
-            Parent = container,
-        }, { create("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }) })
-
-        local selected = nil
-        local expanded = false
-
-        local function rebuild()
-            for _, child in ipairs(list:GetChildren()) do
-                if child:IsA("TextButton") or child:IsA("TextLabel") then
-                    child:Destroy()
-                end
-            end
-            local options = getOptions()
-            if #options == 0 then
-                newLabel({
-                    Size = UDim2.new(1, -6, 0, 26),
-                    Text = "nothing found",
-                    TextColor3 = T("SubText"),
-                    Parent = list,
-                })
-            end
-            for index, name in ipairs(options) do
-                local isSelected = name == selected
-                local button = create("TextButton", {
-                    LayoutOrder = index,
-                    Size = UDim2.new(1, -6, 0, 26),
-                    BackgroundColor3 = isSelected and T("Accent") or T("Raised"),
-                    BorderSizePixel = 0,
-                    AutoButtonColor = false,
-                    Text = name,
-                    Font = Enum.Font.GothamMedium,
-                    TextSize = 12,
-                    TextColor3 = isSelected and T("OnAccent") or T("Text"),
-                    TextTruncate = Enum.TextTruncate.AtEnd,
-                    Parent = list,
-                }, { corner(6) })
-                button.MouseButton1Click:Connect(function()
-                    selected = name
-                    valueLabel.Text = name
-                    expanded = false
-                    expandTo(container, arrow, false, 0)
-                end)
-            end
-            local listHeight = math.min(math.max(#options, 1) * 30, maxList)
-            list.Size = UDim2.new(1, -16, 0, listHeight)
-            return 44 + listHeight + 8
-        end
-
-        hit.MouseButton1Click:Connect(function()
-            expanded = not expanded
-            if expanded then
-                local height = rebuild()
-                expandTo(container, arrow, true, height)
-            else
-                expandTo(container, arrow, false, 0)
-            end
-        end)
-        return {
-            GetSelected = function()
-                return selected
-            end,
-            Clear = function()
-                selected = nil
-                valueLabel.Text = "Select"
-            end,
-        }
-    end
-
-    function kit.addMultiDropdown(page, text, options, selectedMap, callback)
+    function kit.addMultiDropdown(parent, text, options, selectedMap, callback)
         local rowHeight = 30
-        local listTop = 78
-        local container, valueLabel, arrow, hit = dropdownHeader(page, text, "")
+        local listTop = 72
+        local container, valueLabel, arrow, hit = dropdownHeader(parent, text, "")
         local boxes = {}
         local function render()
             local count = 0
             for option, box in pairs(boxes) do
                 local isOn = selectedMap[option] == true
-                box.BackgroundColor3 = isOn and Theme.Accent or Theme.Off
+                box.BackgroundColor3 = isOn and T("Accent") or T("Off")
                 if isOn then
                     count += 1
                 end
@@ -2756,9 +2755,10 @@ function Build.kit()
 
         local function quickButton(label, xScale, xOffset, setAll)
             local button = create("TextButton", {
-                Position = UDim2.new(xScale, xOffset, 0, 44),
-                Size = UDim2.new(0.5, -12, 0, 28),
+                Position = UDim2.new(xScale, xOffset, 0, 38),
+                Size = UDim2.new(0.5, -4, 0, 28),
                 BackgroundColor3 = T("Raised"),
+                BackgroundTransparency = 0.4,
                 BorderSizePixel = 0,
                 AutoButtonColor = false,
                 Text = label,
@@ -2766,7 +2766,7 @@ function Build.kit()
                 TextSize = 12,
                 TextColor3 = T("Text"),
                 Parent = container,
-            }, { corner(6) })
+            }, { corner(8) })
             button.MouseButton1Click:Connect(function()
                 for _, option in ipairs(options) do
                     selectedMap[option] = setAll
@@ -2775,26 +2775,27 @@ function Build.kit()
                 safeCall(callback, selectedMap)
             end)
         end
-        quickButton("Select all", 0, 8, true)
+        quickButton("Select all", 0, 0, true)
         quickButton("Clear", 0.5, 4, false)
 
         for index, option in ipairs(options) do
             local row = create("TextButton", {
-                Position = UDim2.fromOffset(8, listTop + (index - 1) * rowHeight),
-                Size = UDim2.new(1, -16, 0, rowHeight - 4),
+                Position = UDim2.fromOffset(0, listTop + (index - 1) * rowHeight),
+                Size = UDim2.new(1, 0, 0, rowHeight - 4),
                 BackgroundColor3 = T("Raised"),
+                BackgroundTransparency = 0.6,
                 BorderSizePixel = 0,
                 AutoButtonColor = false,
                 Text = "",
                 Parent = container,
-            }, { corner(6) })
+            }, { corner(8) })
             boxes[option] = create("Frame", {
                 AnchorPoint = Vector2.new(0, 0.5),
                 Position = UDim2.new(0, 8, 0.5, 0),
                 Size = UDim2.fromOffset(14, 14),
                 BorderSizePixel = 0,
                 Parent = row,
-            }, { corner(4) })
+            }, { corner(5) })
             newLabel({ Position = UDim2.fromOffset(30, 0), Size = UDim2.new(1, -36, 1, 0), Text = option, Parent = row })
             row.MouseButton1Click:Connect(function()
                 selectedMap[option] = not selectedMap[option]
@@ -2803,42 +2804,55 @@ function Build.kit()
             end)
         end
         render()
-        table.insert(ThemeCallbacks, render)
 
         local expanded = false
         hit.MouseButton1Click:Connect(function()
             expanded = not expanded
-            expandTo(container, arrow, expanded, listTop + #options * rowHeight + 6)
+            expandTo(container, arrow, expanded, listTop + #options * rowHeight + 4)
         end)
     end
 
-    function kit.addButton(page, text, callback, secondary)
-        local base = secondary and "Raised" or "Accent"
+    local function pressEffect(button)
+        local press = create("UIScale", { Scale = 1, Parent = button })
+        button.MouseButton1Down:Connect(function()
+            TweenService:Create(press, TweenInfo.new(0.08, Enum.EasingStyle.Quad), { Scale = 0.96 }):Play()
+        end)
+        local function release()
+            TweenService:Create(press, TweenInfo.new(0.16, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+        end
+        button.MouseButton1Up:Connect(release)
+        button.MouseLeave:Connect(release)
+    end
+
+    function kit.addButton(parent, text, callback, secondary)
         local button = create("TextButton", {
-            Size = UDim2.new(1, 0, 0, 38),
-            BackgroundColor3 = T(base),
+            Size = UDim2.new(1, 0, 0, 34),
+            BackgroundColor3 = secondary and T("Raised") or WHITE,
+            BackgroundTransparency = secondary and 0.4 or 0,
             BorderSizePixel = 0,
             AutoButtonColor = false,
             Text = text,
             Font = Enum.Font.GothamBold,
             TextSize = 13,
             TextColor3 = secondary and T("Text") or T("OnAccent"),
-            LayoutOrder = nextOrder(page),
-            Parent = page,
-        }, { corner(8) })
+            LayoutOrder = nextOrder(parent),
+            Parent = parent,
+        }, { corner(10) })
+        if not secondary then
+            accentGradient(button, 0)
+        end
+        pressEffect(button)
         button.MouseButton1Click:Connect(function()
-            button.BackgroundColor3 = Theme.AccentPressed
-            TweenService:Create(button, TweenInfo.new(0.25), { BackgroundColor3 = Theme[base] }):Play()
             safeCall(callback)
         end)
     end
 
-    function kit.addTextBox(page, placeholder)
-        local row = newRow(page, 40)
+    function kit.addTextBox(parent, placeholder)
+        local row = newRow(parent, 36)
         return create("TextBox", {
-            Position = UDim2.fromOffset(8, 6),
-            Size = UDim2.new(1, -16, 0, 28),
+            Size = UDim2.new(1, 0, 1, 0),
             BackgroundColor3 = T("Raised"),
+            BackgroundTransparency = 0.45,
             BorderSizePixel = 0,
             ClearTextOnFocus = false,
             PlaceholderText = placeholder,
@@ -2849,7 +2863,143 @@ function Build.kit()
             TextColor3 = T("Text"),
             TextXAlignment = Enum.TextXAlignment.Left,
             Parent = row,
-        }, { corner(6), create("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }) })
+        }, {
+            corner(10),
+            stroke(WHITE, 1, 0.88),
+            create("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }),
+        })
+    end
+
+    -- List of teleport targets with a Refresh button. Rows are plain frames in the page,
+    -- so there is no nested scrolling (that is what broke taps on phones before).
+    function kit.addTargetList(parent, title, getEntries, onTeleport, onDelete, hint)
+        local header = newRow(parent, 30)
+        newLabel({ Size = UDim2.new(1, -92, 1, 0), Text = title, Font = Enum.Font.GothamBold, Parent = header })
+        local refresh = create("TextButton", {
+            AnchorPoint = Vector2.new(1, 0.5),
+            Position = UDim2.new(1, 0, 0.5, 0),
+            Size = UDim2.fromOffset(84, 26),
+            BackgroundColor3 = T("Raised"),
+            BackgroundTransparency = 0.35,
+            BorderSizePixel = 0,
+            AutoButtonColor = false,
+            Text = "Refresh",
+            Font = Enum.Font.GothamBold,
+            TextSize = 12,
+            TextColor3 = T("Text"),
+            Parent = header,
+        }, { corner(8) })
+        pressEffect(refresh)
+
+        local listFrame = create("Frame", {
+            Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            LayoutOrder = nextOrder(parent),
+            Parent = parent,
+        }, { create("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }) })
+
+        local function clearRows()
+            for _, child in ipairs(listFrame:GetChildren()) do
+                if child:IsA("GuiObject") then
+                    child:Destroy()
+                end
+            end
+        end
+
+        local function smallButton(row, text, rightOffset, width, primary)
+            local button = create("TextButton", {
+                AnchorPoint = Vector2.new(1, 0.5),
+                Position = UDim2.new(1, rightOffset, 0.5, 0),
+                Size = UDim2.fromOffset(width, 24),
+                BackgroundColor3 = primary and WHITE or T("Off"),
+                BackgroundTransparency = primary and 0 or 0.3,
+                BorderSizePixel = 0,
+                AutoButtonColor = false,
+                Text = text,
+                Font = Enum.Font.GothamBold,
+                TextSize = 12,
+                TextColor3 = T("OnAccent"),
+                Parent = row,
+            }, { corner(8) })
+            if primary then
+                accentGradient(button, 0)
+            end
+            pressEffect(button)
+            return button
+        end
+
+        local function rebuild()
+            clearRows()
+            local entries = getEntries()
+            if #entries == 0 then
+                newLabel({
+                    Size = UDim2.new(1, 0, 0, 24),
+                    Text = "nothing found",
+                    TextColor3 = T("SubText"),
+                    TextSize = 12,
+                    Parent = listFrame,
+                })
+                return
+            end
+            for index, entry in ipairs(entries) do
+                if index > 40 then
+                    newLabel({
+                        LayoutOrder = index,
+                        Size = UDim2.new(1, 0, 0, 22),
+                        Text = "+" .. (#entries - 40) .. " more not shown",
+                        TextColor3 = T("SubText"),
+                        TextSize = 12,
+                        Parent = listFrame,
+                    })
+                    break
+                end
+                local row = create("Frame", {
+                    LayoutOrder = index,
+                    Size = UDim2.new(1, 0, 0, 32),
+                    BackgroundColor3 = T("Raised"),
+                    BackgroundTransparency = 0.6,
+                    BorderSizePixel = 0,
+                    Parent = listFrame,
+                }, { corner(8) })
+                local labelWidth = (entry.deletable and onDelete) and -120 or -78
+                newLabel({
+                    Position = UDim2.fromOffset(10, 0),
+                    Size = UDim2.new(1, labelWidth, 1, 0),
+                    Text = entry.label,
+                    TextTruncate = Enum.TextTruncate.AtEnd,
+                    Parent = row,
+                })
+                local go = smallButton(row, "TP", -6, 52, true)
+                go.MouseButton1Click:Connect(function()
+                    safeCall(onTeleport, entry)
+                end)
+                if entry.deletable and onDelete then
+                    local delete = smallButton(row, "x", -64, 34, false)
+                    delete.MouseButton1Click:Connect(function()
+                        safeCall(onDelete, entry)
+                    end)
+                end
+            end
+        end
+
+        refresh.MouseButton1Click:Connect(function()
+            safeCall(rebuild)
+        end)
+
+        if hint then
+            newLabel({
+                Size = UDim2.new(1, 0, 0, 24),
+                Text = hint,
+                TextColor3 = T("SubText"),
+                TextSize = 12,
+                Parent = listFrame,
+            })
+        else
+            safeCall(rebuild)
+        end
+        return { Refresh = rebuild }
     end
 
     return kit
@@ -2862,15 +3012,20 @@ end
 function Build.hub()
     local Esp, Move, Flight, Econ = Mod.esp, Mod.move, Mod.flight, Mod.econ
     local Screen, Targets, World, Kit = Mod.screen, Mod.targets, Mod.world, Mod.kit
-    local addSection, addLabel, addToggle, addSlider = Kit.addSection, Kit.addLabel, Kit.addToggle, Kit.addSlider
-    local addColorPicker, addDropdown, addDynamicDropdown = Kit.addColorPicker, Kit.addDropdown, Kit.addDynamicDropdown
-    local addMultiDropdown, addButton, addTextBox = Kit.addMultiDropdown, Kit.addButton, Kit.addTextBox
+    local addCard, addLabel, addToggle, addSlider = Kit.addCard, Kit.addLabel, Kit.addToggle, Kit.addSlider
+    local addColorPicker, addDropdown, addMultiDropdown = Kit.addColorPicker, Kit.addDropdown, Kit.addMultiDropdown
+    local addButton, addTextBox, addTargetList = Kit.addButton, Kit.addTextBox, Kit.addTargetList
     local makeDraggable = Kit.makeDraggable
     local api = {}
 
+    local HEADER_H = 46
+    local TABBAR_H = 44
+    local TAB_COUNT = 4
+    local CONTENT_TOP = HEADER_H + TABBAR_H
+
     local function computeWindowSize()
         local screen = getScreenSize()
-        return math.clamp(screen.X - 40, 320, 560), math.clamp(screen.Y - 40, 240, 360)
+        return math.clamp(screen.X - 40, 320, 430), math.clamp(screen.Y - 40, 250, 390)
     end
 
     local normalW, normalH = computeWindowSize()
@@ -2880,155 +3035,203 @@ function Build.hub()
     local startY = math.floor((startScreen.Y - winH) / 2)
     local iconSize = Settings.IconSize
 
+    -- Body: slightly see-through dark glass with a slowly turning purple outline.
     local window = create("CanvasGroup", {
         Name = "Window",
         Active = true,
         BackgroundColor3 = T("Background"),
+        BackgroundTransparency = 0.1,
         BorderSizePixel = 0,
         GroupTransparency = 1,
         Position = UDim2.fromOffset(startX, startY + 14),
         Size = UDim2.fromOffset(winW, winH),
         Parent = screenGui,
-    }, { corner(12), stroke(T("Border"), 2) })
+    }, { corner(18), gradientStroke(2) })
 
-    local titleBar = create("Frame", {
-        Name = "TitleBar",
-        Active = true,
-        BackgroundColor3 = T("Panel"),
+    create("Frame", {
+        Name = "Glow",
+        Size = UDim2.new(1, 0, 0, 150),
+        BackgroundColor3 = T("Accent"),
         BorderSizePixel = 0,
-        Size = UDim2.new(1, 0, 0, TITLE_HEIGHT),
+        Parent = window,
+    }, {
+        create("UIGradient", {
+            Rotation = 90,
+            Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.76), NumberSequenceKeypoint.new(1, 1) }),
+        }),
+    })
+
+    ----------------------------------------------------------------------------
+    -- Header: window dots, logo, title
+    ----------------------------------------------------------------------------
+
+    local header = create("Frame", {
+        Name = "Header",
+        Active = true,
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, HEADER_H),
         Parent = window,
     })
     create("Frame", {
-        Position = UDim2.new(0, 0, 1, -1),
-        Size = UDim2.new(1, 0, 0, 1),
-        BackgroundColor3 = T("Border"),
+        Position = UDim2.new(0, 14, 1, -1),
+        Size = UDim2.new(1, -28, 0, 1),
+        BackgroundColor3 = WHITE,
+        BackgroundTransparency = 0.92,
         BorderSizePixel = 0,
-        Parent = titleBar,
-    })
-    newLabel({
-        Name = "Title",
-        AnchorPoint = Vector2.new(0.5, 0.5),
-        Position = UDim2.fromScale(0.5, 0.5),
-        Size = UDim2.fromOffset(160, 20),
-        Text = HUB_NAME,
-        Font = Enum.Font.GothamBold,
-        TextSize = 14,
-        TextXAlignment = Enum.TextXAlignment.Center,
-        Parent = titleBar,
+        Parent = header,
     })
 
-    local function makeLight(color, xOffset)
+    local function makeDot(color, xOffset)
         return create("TextButton", {
             AnchorPoint = Vector2.new(0, 0.5),
             Position = UDim2.new(0, xOffset, 0.5, 0),
-            Size = UDim2.fromOffset(18, 18),
+            Size = UDim2.fromOffset(15, 15),
             BackgroundColor3 = color,
             BorderSizePixel = 0,
             AutoButtonColor = false,
             Text = "",
-            Font = Enum.Font.GothamBold,
-            TextSize = 13,
-            TextColor3 = Color3.fromRGB(45, 45, 45),
-            Parent = titleBar,
+            Parent = header,
         }, { pill() })
     end
 
-    local closeLight = makeLight(Color3.fromRGB(255, 95, 87), 12)
-    local minimizeLight = makeLight(Color3.fromRGB(254, 188, 46), 38)
-    local zoomLight = makeLight(Color3.fromRGB(40, 200, 64), 64)
+    local closeDot = makeDot(Color3.fromRGB(255, 95, 87), 16)
+    local minimizeDot = makeDot(Color3.fromRGB(254, 188, 46), 40)
+    local zoomDot = makeDot(Color3.fromRGB(40, 200, 64), 64)
 
-    local lightGlyphs = { [closeLight] = "x", [minimizeLight] = "-", [zoomLight] = "+" }
-    for light in pairs(lightGlyphs) do
-        light.MouseEnter:Connect(function()
-            for other, glyph in pairs(lightGlyphs) do
-                other.Text = glyph
-            end
-        end)
-        light.MouseLeave:Connect(function()
-            for other in pairs(lightGlyphs) do
-                other.Text = ""
-            end
-        end)
-    end
-
-    local sidebar = create("Frame", {
-        Name = "Sidebar",
-        Active = true,
-        BackgroundColor3 = T("Panel"),
-        BorderSizePixel = 0,
-        Position = UDim2.fromOffset(0, TITLE_HEIGHT),
-        Size = UDim2.new(0, SIDEBAR_WIDTH, 1, -TITLE_HEIGHT),
-        Parent = window,
+    -- Small crescent next to the title.
+    local logo = create("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, -58, 0.5, 0),
+        Size = UDim2.fromOffset(24, 24),
+        BackgroundTransparency = 1,
+        Parent = header,
     })
     create("Frame", {
-        Position = UDim2.new(1, -1, 0, 0),
-        Size = UDim2.new(0, 1, 1, 0),
-        BackgroundColor3 = T("Border"),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.446, 0.5),
+        Size = UDim2.fromScale(0.536, 0.536),
+        BackgroundColor3 = T("Moon"),
         BorderSizePixel = 0,
-        Parent = sidebar,
-    })
-    local tabList = create("Frame", {
-        BackgroundTransparency = 1,
-        Size = UDim2.new(1, 0, 1, -30),
-        Parent = sidebar,
-    }, {
-        create("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
-        create("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 9) }),
-    })
+        Parent = logo,
+    }, { pill() })
+    create("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.607, 0.411),
+        Size = UDim2.fromScale(0.464, 0.464),
+        BackgroundColor3 = T("Background"),
+        BackgroundTransparency = 0.1,
+        BorderSizePixel = 0,
+        ZIndex = 2,
+        Parent = logo,
+    }, { pill() })
     newLabel({
-        AnchorPoint = Vector2.new(0.5, 1),
-        Position = UDim2.new(0.5, 0, 1, -8),
-        Size = UDim2.new(1, -16, 0, 16),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 6, 0.5, 0),
+        Size = UDim2.fromOffset(120, 20),
+        Text = HUB_NAME,
+        Font = Enum.Font.GothamBold,
+        TextSize = 15,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = header,
+    })
+    local tag = create("Frame", {
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -14, 0.5, 0),
+        Size = UDim2.fromOffset(38, 20),
+        BackgroundColor3 = T("Accent"),
+        BackgroundTransparency = 0.45,
+        BorderSizePixel = 0,
+        Parent = header,
+    }, { pill() })
+    newLabel({
+        Size = UDim2.fromScale(1, 1),
         Text = "YBA",
+        Font = Enum.Font.GothamBold,
         TextSize = 11,
-        TextColor3 = T("SubText"),
         TextXAlignment = Enum.TextXAlignment.Center,
-        Parent = sidebar,
+        Parent = tag,
+    })
+
+    ----------------------------------------------------------------------------
+    -- Tabs: a segmented bar with a sliding indicator
+    ----------------------------------------------------------------------------
+
+    local tabTrack = create("Frame", {
+        Name = "TabBar",
+        Position = UDim2.fromOffset(14, HEADER_H + 7),
+        Size = UDim2.new(1, -28, 0, 32),
+        BackgroundColor3 = T("Panel"),
+        BackgroundTransparency = 0.45,
+        BorderSizePixel = 0,
+        Parent = window,
+    }, { pill(), stroke(WHITE, 1, 0.92) })
+    local indicator = create("Frame", {
+        Size = UDim2.new(1 / TAB_COUNT, -6, 1, -6),
+        Position = UDim2.new(0, 3, 0, 3),
+        BackgroundColor3 = WHITE,
+        BorderSizePixel = 0,
+        ZIndex = 1,
+        Parent = tabTrack,
+    }, {
+        pill(),
+        create("UIGradient", {
+            Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, T("Accent")),
+                ColorSequenceKeypoint.new(1, T("Accent2")),
+            }),
+        }),
     })
 
     local content = create("Frame", {
         Name = "Content",
         BackgroundTransparency = 1,
         ClipsDescendants = true,
-        Position = UDim2.fromOffset(SIDEBAR_WIDTH, TITLE_HEIGHT),
-        Size = UDim2.new(1, -SIDEBAR_WIDTH, 1, -TITLE_HEIGHT),
+        Position = UDim2.fromOffset(0, CONTENT_TOP),
+        Size = UDim2.new(1, 0, 1, -CONTENT_TOP),
         Parent = window,
     })
 
     local Tabs = {}
     local activeTab = nil
-    local function paintTabs()
-        for tabName, tab in pairs(Tabs) do
-            local isSelected = tabName == activeTab
-            tab.page.Visible = isSelected
-            TweenService:Create(tab.button, TweenInfo.new(0.15), {
-                BackgroundTransparency = isSelected and 0 or 1,
-                BackgroundColor3 = Theme.TabSelected,
-                TextColor3 = isSelected and Theme.Text or Theme.SubText,
-            }):Play()
-        end
-    end
-    table.insert(ThemeCallbacks, paintTabs)
 
     local function selectTab(name)
+        if activeTab == name then
+            return
+        end
         activeTab = name
-        paintTabs()
+        for tabName, tab in pairs(Tabs) do
+            local isSelected = tabName == name
+            tab.page.Visible = isSelected
+            TweenService:Create(tab.button, TweenInfo.new(0.18), {
+                TextColor3 = isSelected and T("OnAccent") or T("SubText"),
+            }):Play()
+            if isSelected then
+                tab.page.Position = UDim2.fromOffset(0, 14)
+                TweenService:Create(tab.page, TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                    Position = UDim2.fromOffset(0, 0),
+                }):Play()
+                TweenService:Create(indicator, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                    Position = UDim2.new((tab.index - 1) / TAB_COUNT, 3, 0, 3),
+                }):Play()
+            end
+        end
     end
 
-    local function addTab(name, order)
+    local function addTab(name, index)
         local button = create("TextButton", {
             Name = name,
-            LayoutOrder = order,
-            Size = UDim2.new(1, 0, 0, 32),
+            Position = UDim2.new((index - 1) / TAB_COUNT, 0, 0, 0),
+            Size = UDim2.new(1 / TAB_COUNT, 0, 1, 0),
             BackgroundTransparency = 1,
             BorderSizePixel = 0,
             AutoButtonColor = false,
             Text = name,
-            Font = Enum.Font.GothamMedium,
-            TextSize = 13,
-            Parent = tabList,
-        }, { corner(8) })
+            Font = Enum.Font.GothamBold,
+            TextSize = 12,
+            TextColor3 = T("SubText"),
+            ZIndex = 2,
+            Parent = tabTrack,
+        })
         local page = create("ScrollingFrame", {
             Name = name .. "Page",
             Visible = false,
@@ -3039,18 +3242,18 @@ function Build.hub()
             AutomaticCanvasSize = Enum.AutomaticSize.Y,
             ScrollingDirection = Enum.ScrollingDirection.Y,
             ScrollBarThickness = 3,
-            ScrollBarImageColor3 = T("ScrollBar"),
+            ScrollBarImageColor3 = T("Accent2"),
             Parent = content,
         }, {
-            create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }),
+            create("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }),
             create("UIPadding", {
-                PaddingTop = UDim.new(0, 10),
-                PaddingBottom = UDim.new(0, 10),
-                PaddingLeft = UDim.new(0, 10),
-                PaddingRight = UDim.new(0, 12),
+                PaddingTop = UDim.new(0, 8),
+                PaddingBottom = UDim.new(0, 14),
+                PaddingLeft = UDim.new(0, 14),
+                PaddingRight = UDim.new(0, 16),
             }),
         })
-        Tabs[name] = { page = page, button = button }
+        Tabs[name] = { page = page, button = button, index = index }
         button.MouseButton1Click:Connect(function()
             selectTab(name)
         end)
@@ -3063,69 +3266,72 @@ function Build.hub()
 
     local farmingPage = addTab("Farming", 1)
 
-    addSection(farmingPage, "Auto farm items")
-    addToggle(farmingPage, "Auto farm items", false, function(value)
+    local farmCard = addCard(farmingPage, "Auto farm items")
+    addToggle(farmCard, "Auto farm items", false, function(value)
         if value then
             Flight.startFarm()
         else
             Flight.stopFarm()
         end
     end)
-    addSlider(farmingPage, "Tween speed", 500, 3000, State.Farm.Speed, 50, " studs/s", function(value)
+    addSlider(farmCard, "Tween speed", 100, 2000, State.Farm.Speed, 10, " studs/s", function(value)
         State.Farm.Speed = value
     end)
-    addDropdown(farmingPage, "Target priority", { "Distance", "Value" }, State.Farm.Priority, function(option)
+    addToggle(farmCard, "Safe mode (humanized)", State.Farm.Humanize, function(value)
+        State.Farm.Humanize = value
+    end)
+    addDropdown(farmCard, "Target priority", { "Distance", "Value" }, State.Farm.Priority, function(option)
         State.Farm.Priority = option
     end)
-    addMultiDropdown(farmingPage, "Items filter", FILTER_OPTIONS, State.Farm.Selected, function(selectedMap)
+    addMultiDropdown(farmCard, "Items filter", FILTER_OPTIONS, State.Farm.Selected, function(selectedMap)
         State.Farm.Selected = selectedMap
     end)
-    addButton(farmingPage, "Teleport to Nearest", Flight.flyToNearest)
-    Flight.statusLabel = addLabel(farmingPage, "Status: idle")
+    addButton(farmCard, "Fly to nearest item", Flight.flyToNearest)
+    Flight.statusLabel = addLabel(farmCard, "Status: idle")
 
-    addSection(farmingPage, "Auto sell")
-    addToggle(farmingPage, "Auto sell", false, function(value)
+    local sellCard = addCard(farmingPage, "Auto sell")
+    addToggle(sellCard, "Auto sell", false, function(value)
         State.Sell.Enabled = value
         if not value then
             Econ.setSellStatus("idle")
         end
     end)
-    addMultiDropdown(farmingPage, "Items to sell", ITEM_LABELS, State.Sell.Selected, function(selectedMap)
+    addMultiDropdown(sellCard, "Items to sell", ITEM_LABELS, State.Sell.Selected, function(selectedMap)
         State.Sell.Selected = selectedMap
     end)
-    addToggle(farmingPage, "Don't sell rare items", State.Sell.ProtectRare, function(value)
+    addToggle(sellCard, "Don't sell rare items", State.Sell.ProtectRare, function(value)
         State.Sell.ProtectRare = value
     end)
-    addSlider(farmingPage, "Sell every", 5, 120, State.Sell.Interval, 5, " s", function(value)
+    addSlider(sellCard, "Sell every", 5, 120, State.Sell.Interval, 5, " s", function(value)
         State.Sell.Interval = value
     end)
-    addButton(farmingPage, "Sell now", function()
+    addButton(sellCard, "Sell now", function()
         task.spawn(Econ.runSellCycle)
     end, true)
-    Econ.sellLabel = addLabel(farmingPage, "Status: idle")
-    addLabel(farmingPage, "Rare items kept: Lucky Arrow, Lucky Stone Mask")
+    Econ.sellLabel = addLabel(sellCard, "Status: idle")
+    addLabel(sellCard, "Rare items kept: Lucky Arrow, Lucky Stone Mask")
 
-    addSection(farmingPage, "Auto buy")
-    addToggle(farmingPage, "Auto buy Lucky Arrows", false, function(value)
+    local buyCard = addCard(farmingPage, "Auto buy")
+    addToggle(buyCard, "Auto buy Lucky Arrows", false, function(value)
         State.Buy.Enabled = value
         if not value then
             Econ.setBuyStatus("idle")
         end
     end)
-    addSlider(farmingPage, "Hold up to", 1, 25, State.Buy.Target, 1, " arrows", function(value)
+    addSlider(buyCard, "Hold up to", 1, 25, State.Buy.Target, 1, " arrows", function(value)
         State.Buy.Target = value
     end)
-    Econ.buyLabel = addLabel(farmingPage, "Status: idle")
-    addLabel(farmingPage, "Price: $75,000 each")
+    Econ.buyLabel = addLabel(buyCard, "Status: idle")
+    addLabel(buyCard, "Price: $75,000 each")
 
-    addSection(farmingPage, "Utilities")
-    addToggle(farmingPage, "Anti AFK", State.Utils.AntiAfk, function(value)
+    local utilsCard = addCard(farmingPage, "Utilities")
+    addToggle(utilsCard, "Anti AFK", State.Utils.AntiAfk, function(value)
         State.Utils.AntiAfk = value
     end)
-    addToggle(farmingPage, "Auto press Play after rejoin", State.Utils.AutoPlay, function(value)
+    addToggle(utilsCard, "Auto press Play after rejoin", State.Utils.AutoPlay, function(value)
         State.Utils.AutoPlay = value
     end)
-    Screen.toggle = addToggle(farmingPage, "Farm screen", false, function(value)
+    Screen.toggle = addToggle(utilsCard, "Farm screen", false, function(value)
         Screen.set(value)
         if value then
             safeCall(Screen.update)
@@ -3138,8 +3344,8 @@ function Build.hub()
 
     local visualsPage = addTab("Visuals", 2)
 
-    addSection(visualsPage, "Items ESP")
-    addToggle(visualsPage, "Show items", false, function(value)
+    local itemEspCard = addCard(visualsPage, "Items ESP")
+    addToggle(itemEspCard, "Show items", false, function(value)
         State.ItemESP.Enabled = value
         if value then
             task.spawn(safeCall, Esp.refreshItems)
@@ -3147,22 +3353,22 @@ function Build.hub()
             Esp.clearItems()
         end
     end)
-    addSlider(visualsPage, "Range", 500, 5000, State.ItemESP.Range, 50, " studs", function(value)
+    addSlider(itemEspCard, "Range", 500, 5000, State.ItemESP.Range, 50, " studs", function(value)
         State.ItemESP.Range = value
     end)
-    addColorPicker(visualsPage, "Items color", State.ItemESP.Color, function(color)
+    addColorPicker(itemEspCard, "Items color", State.ItemESP.Color, function(color)
         State.ItemESP.Color = color
     end)
 
-    addSection(visualsPage, "Players ESP")
-    addToggle(visualsPage, "Show players", false, function(value)
+    local playerEspCard = addCard(visualsPage, "Players ESP")
+    addToggle(playerEspCard, "Show players", false, function(value)
         State.PlayerESP.Enabled = value
         if not value then
             Esp.clearPlayers()
         end
     end)
     addMultiDropdown(
-        visualsPage,
+        playerEspCard,
         "Display",
         { "Name", "Distance", "Health", "Stand", "Spec", "Level" },
         State.PlayerESP.Fields,
@@ -3170,28 +3376,28 @@ function Build.hub()
             State.PlayerESP.Fields = selectedMap
         end
     )
-    addSlider(visualsPage, "Range", 500, 5000, State.PlayerESP.Range, 50, " studs", function(value)
+    addSlider(playerEspCard, "Range", 500, 5000, State.PlayerESP.Range, 50, " studs", function(value)
         State.PlayerESP.Range = value
     end)
-    addToggle(visualsPage, "Tracers", false, function(value)
+    addToggle(playerEspCard, "Tracers", false, function(value)
         State.PlayerESP.Tracers = value
         if not value then
             Esp.clearTracers()
         end
     end)
-    addColorPicker(visualsPage, "Players color", State.PlayerESP.Color, function(color)
+    addColorPicker(playerEspCard, "Players color", State.PlayerESP.Color, function(color)
         State.PlayerESP.Color = color
     end)
 
-    addSection(visualsPage, "World")
-    addToggle(visualsPage, "Fullbright", false, World.setFullbright)
-    addToggle(visualsPage, "No fog", false, World.setNoFog)
-    addToggle(visualsPage, "Override time of day", false, World.setTimeOverride)
-    addSlider(visualsPage, "Time of day", 0, 24, State.World.TimeValue, 0.5, " h", function(value)
+    local worldCard = addCard(visualsPage, "World")
+    addToggle(worldCard, "Fullbright", false, World.setFullbright)
+    addToggle(worldCard, "No fog", false, World.setNoFog)
+    addToggle(worldCard, "Override time of day", false, World.setTimeOverride)
+    addSlider(worldCard, "Time of day", 0, 24, State.World.TimeValue, 0.5, " h", function(value)
         State.World.TimeValue = value
     end)
-    addToggle(visualsPage, "Override FOV", false, World.setFovOverride)
-    addSlider(visualsPage, "FOV", 40, 120, State.World.FovValue, 1, "", function(value)
+    addToggle(worldCard, "Override FOV", false, World.setFovOverride)
+    addSlider(worldCard, "FOV", 40, 120, State.World.FovValue, 1, "", function(value)
         State.World.FovValue = value
     end)
 
@@ -3201,60 +3407,105 @@ function Build.hub()
 
     local playerPage = addTab("Player", 3)
 
-    addSection(playerPage, "Movement")
-    addToggle(playerPage, "Walk speed", false, Move.setWalk)
-    addSlider(playerPage, "Speed", 16, 150, State.Walk.Speed, 1, "", function(value)
+    local moveCard = addCard(playerPage, "Movement")
+    addToggle(moveCard, "Walk speed", false, Move.setWalk)
+    addSlider(moveCard, "Speed", 16, 150, State.Walk.Speed, 1, "", function(value)
         State.Walk.Speed = value
     end)
-    addToggle(playerPage, "Fly", false, Move.setFly)
-    addSlider(playerPage, "Fly speed", 10, 300, State.Fly.Speed, 5, " studs/s", function(value)
+    addToggle(moveCard, "Fly", false, Move.setFly)
+    addSlider(moveCard, "Fly speed", 10, 300, State.Fly.Speed, 5, " studs/s", function(value)
         State.Fly.Speed = value
     end)
-    addToggle(playerPage, "Noclip", false, Move.setNoclip)
-    addLabel(playerPage, "Fly: move stick or WASD, look up/down to climb, Space/Ctrl on PC")
+    addToggle(moveCard, "Noclip", false, Move.setNoclip)
+    addLabel(moveCard, "Fly: move stick or WASD, look up/down to climb, Space/Ctrl on PC")
 
-    addSection(playerPage, "Teleports")
-    addSlider(playerPage, "Teleport speed", 500, 5000, State.Teleport.Speed, 50, " studs/s", function(value)
-        State.Teleport.Speed = value
+    local tpCard = addCard(playerPage, "Teleports")
+    Flight.tpLabel = addLabel(tpCard, "Status: idle")
+    addLabel(tpCard, "Teleports are instant. The anticheat can rubber-band them back.")
+
+    local playersCard = addCard(playerPage, nil)
+    local playersList
+    playersList = addTargetList(playersCard, "Players on the server", function()
+        local entries = {}
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                local label = player.DisplayName
+                if player.DisplayName ~= player.Name then
+                    label = label .. " (@" .. player.Name .. ")"
+                end
+                table.insert(entries, { label = label, name = player.Name })
+            end
+        end
+        table.sort(entries, function(a, b)
+            return string.lower(a.label) < string.lower(b.label)
+        end)
+        return entries
+    end, function(entry)
+        local target = Players:FindFirstChild(entry.name)
+        local char = target and target.Character
+        local targetRoot = char and char:FindFirstChild("HumanoidRootPart")
+        if not targetRoot then
+            Flight.setTpStatus(entry.label .. " has no character yet")
+            return
+        end
+        local position = (targetRoot.CFrame * CFrame.new(0, 0, 4)).Position + Vector3.new(0, 1, 0)
+        Flight.teleportInstant(position, entry.label)
     end)
+    track(Players.PlayerAdded:Connect(function()
+        task.defer(safeCall, playersList.Refresh)
+    end))
+    track(Players.PlayerRemoving:Connect(function()
+        task.defer(safeCall, playersList.Refresh)
+    end))
 
-    local npcPicker = addDynamicDropdown(playerPage, "NPC", Targets.listNpcs)
-    addButton(playerPage, "Teleport to NPC", function()
-        local name = npcPicker.GetSelected()
-        local model = name and Targets.npcModel(name)
+    local npcCard = addCard(playerPage, nil)
+    addTargetList(npcCard, "NPCs", function()
+        local entries = {}
+        for _, name in ipairs(Targets.listNpcs()) do
+            table.insert(entries, { label = name, name = name })
+        end
+        return entries
+    end, function(entry)
+        local model = Targets.npcModel(entry.name)
         local position = model and model.Parent and Targets.frontPosition(model)
         if position then
-            Flight.teleportTo(position, name)
+            Flight.teleportInstant(position, entry.label)
         else
-            Flight.setTpStatus("pick an NPC first")
+            Flight.setTpStatus(entry.label .. " is not available")
         end
-    end)
+    end, nil, "Tap Refresh to scan for NPCs")
 
-    local playerPicker = addDynamicDropdown(playerPage, "Player", Targets.listPlayers)
-    addButton(playerPage, "Teleport to player", function()
-        local name = playerPicker.GetSelected()
-        local target = name and Players:FindFirstChild(name)
-        local char = target and target.Character
-        local position = char and Targets.frontPosition(char)
-        if position then
-            Flight.teleportTo(position, name)
-        else
-            Flight.setTpStatus("pick a player first")
+    local placesCard = addCard(playerPage, nil)
+    local placesList
+    placesList = addTargetList(placesCard, "Places", function()
+        local entries = {}
+        local saved = {}
+        for _, place in ipairs(Settings.Places) do
+            saved[place.name] = true
         end
-    end)
-
-    local placePicker = addDynamicDropdown(playerPage, "Place", Targets.listPlaces)
-    addButton(playerPage, "Teleport to place", function()
-        local name = placePicker.GetSelected()
-        local position = name and Targets.placePosition(name)
+        for _, name in ipairs(Targets.listPlaces()) do
+            table.insert(entries, { label = name, name = name, deletable = saved[name] == true })
+        end
+        return entries
+    end, function(entry)
+        local position = Targets.placePosition(entry.name)
         if position then
-            Flight.teleportTo(position, name)
+            Flight.teleportInstant(position, entry.label)
         else
             Flight.setTpStatus("pick a place first")
         end
-    end)
-    local placeNameBox = addTextBox(playerPage, "New place name")
-    addButton(playerPage, "Save current position", function()
+    end, function(entry)
+        for index = #Settings.Places, 1, -1 do
+            if Settings.Places[index].name == entry.name then
+                table.remove(Settings.Places, index)
+            end
+        end
+        saveSettings()
+        Flight.setTpStatus("deleted " .. entry.label)
+        placesList.Refresh()
+    end, "Tap Refresh to list places")
+    local placeNameBox = addTextBox(placesCard, "New place name")
+    addButton(placesCard, "Save current position", function()
         local root = getRoot()
         if not root then
             Flight.setTpStatus("waiting for character")
@@ -3274,24 +3525,11 @@ function Build.hub()
         saveSettings()
         placeNameBox.Text = ""
         Flight.setTpStatus("saved place " .. name)
+        placesList.Refresh()
     end, true)
-    addButton(playerPage, "Delete selected place", function()
-        local name = placePicker.GetSelected()
-        for index = #Settings.Places, 1, -1 do
-            if Settings.Places[index].name == name then
-                table.remove(Settings.Places, index)
-                saveSettings()
-                placePicker.Clear()
-                Flight.setTpStatus("deleted " .. name)
-                return
-            end
-        end
-        Flight.setTpStatus("only saved places can be deleted")
-    end, true)
-    Flight.tpLabel = addLabel(playerPage, "Status: idle")
 
     ----------------------------------------------------------------------------
-    -- Minimized icon (follows the theme)
+    -- Minimized icon
     ----------------------------------------------------------------------------
 
     local minimized = false
@@ -3307,7 +3545,7 @@ function Build.hub()
         Position = UDim2.fromOffset(20, 20),
         Size = UDim2.fromOffset(iconSize, iconSize),
         Parent = screenGui,
-    }, { corner(14), stroke(T("IconStroke"), 2), iconScale })
+    }, { corner(16), gradientStroke(2), iconScale })
 
     -- Crescent: a disc with a background-colored disc cut out of it (scale based, follows the icon size).
     create("Frame", {
@@ -3401,12 +3639,11 @@ function Build.hub()
         }):Play()
     end
 
-    makeDraggable(titleBar, window)
-    makeDraggable(sidebar, window)
+    makeDraggable(header, window)
     makeDraggable(icon, icon, restoreWindow)
 
-    minimizeLight.MouseButton1Click:Connect(minimizeWindow)
-    zoomLight.MouseButton1Click:Connect(toggleZoom)
+    minimizeDot.MouseButton1Click:Connect(minimizeWindow)
+    zoomDot.MouseButton1Click:Connect(toggleZoom)
 
     track(UserInputService.InputBegan:Connect(function(input, processed)
         if processed then
@@ -3422,54 +3659,13 @@ function Build.hub()
     end))
 
     ----------------------------------------------------------------------------
-    -- Theme change: the new theme sweeps in from the bottom-right to the top-left
-    ----------------------------------------------------------------------------
-
-    local function playThemeWipe(oldColor)
-        local overlay = create("Frame", {
-            Size = UDim2.fromScale(1, 1),
-            BackgroundColor3 = oldColor,
-            BorderSizePixel = 0,
-            ZIndex = 1000,
-            Parent = window,
-        })
-        local gradient = create("UIGradient", {
-            Rotation = 45,
-            Offset = Vector2.new(0.6, 0.6),
-            Transparency = NumberSequence.new({
-                NumberSequenceKeypoint.new(0, 0),
-                NumberSequenceKeypoint.new(0.45, 0),
-                NumberSequenceKeypoint.new(0.55, 1),
-                NumberSequenceKeypoint.new(1, 1),
-            }),
-            Parent = overlay,
-        })
-        TweenService:Create(gradient, TweenInfo.new(0.42, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {
-            Offset = Vector2.new(-0.6, -0.6),
-        }):Play()
-        task.delay(0.5, function()
-            overlay:Destroy()
-        end)
-    end
-
-    ----------------------------------------------------------------------------
     -- Tab: Settings
     ----------------------------------------------------------------------------
 
     local settingsPage = addTab("Settings", 4)
 
-    addSection(settingsPage, "Appearance")
-    addDropdown(settingsPage, "Script theme", { "Dark", "Light" }, Settings.Theme, function(option)
-        if option == Settings.Theme then
-            return
-        end
-        local oldColor = Theme.Background
-        Settings.Theme = option
-        playThemeWipe(oldColor)
-        applyTheme(option)
-        saveSettings()
-    end)
-    addSlider(settingsPage, "Mini icon size", 40, 96, iconSize, 2, " px", function(value)
+    local interfaceCard = addCard(settingsPage, "Interface")
+    addSlider(interfaceCard, "Mini icon size", 40, 96, iconSize, 2, " px", function(value)
         iconSize = value
         Settings.IconSize = value
         if icon.Visible then
@@ -3479,13 +3675,14 @@ function Build.hub()
         end
         saveSettings()
     end)
-    addToggle(settingsPage, "Show FPS", Settings.ShowFps, function(value)
+    addToggle(interfaceCard, "Show FPS", Settings.ShowFps, function(value)
         Settings.ShowFps = value
         Screen.setFpsVisible(value)
         saveSettings()
     end)
-    addSection(settingsPage, "Info")
-    addLabel(settingsPage, "RightShift or the yellow dot minimizes the window")
+
+    local aboutCard = addCard(settingsPage, "About")
+    addLabel(aboutCard, "RightShift or the yellow dot minimizes the window. Drag the header to move it.")
 
     selectTab("Farming")
 
@@ -3525,14 +3722,14 @@ function Build.hub()
     end
     api.Destroy = destroyHub
 
-    closeLight.MouseButton1Click:Connect(function()
+    closeDot.MouseButton1Click:Connect(function()
         TweenService:Create(window, TweenInfo.new(0.18, Enum.EasingStyle.Quad), { GroupTransparency = 1 }):Play()
         task.delay(0.2, destroyHub)
     end)
 
     -- Intro: the window fades in and slides up once the loading screen is leaving.
     function api.Show()
-        TweenService:Create(window, TweenInfo.new(0.32, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+        TweenService:Create(window, TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
             GroupTransparency = 0,
             Position = UDim2.fromOffset(startX, startY),
         }):Play()
@@ -3565,7 +3762,7 @@ local function emergencyCleanup()
 end
 
 local function boot()
-    Loader.Step(0.05, "Preparing interface")
+    Loader.Step(0.04, "Preparing interface")
     screenGui = newScreenGui(HUB_NAME, 50, true)
     farmGui = newScreenGui(HUB_NAME .. "_FarmScreen", 40, false)
     tracerGui = newScreenGui(HUB_NAME .. "_Tracers", 10, true)
@@ -3573,7 +3770,7 @@ local function boot()
     if not (mount(screenGui) and mount(farmGui) and mount(tracerGui) and mount(espFolder)) then
         error("no writable UI container found", 0)
     end
-    task.wait(0.08)
+    task.wait(0.45)
 
     local order = {
         { "esp", "Loading ESP engine" },
@@ -3587,13 +3784,13 @@ local function boot()
         { "hub", "Building window" },
     }
     for index, entry in ipairs(order) do
-        Loader.Step(0.1 + 0.85 * (index - 1) / #order, entry[2])
+        Loader.Step(0.08 + 0.87 * (index - 1) / #order, entry[2])
         local ok, result = pcall(Build[entry[1]])
         if not ok then
             error(entry[1] .. ": " .. tostring(result), 0)
         end
         Mod[entry[1]] = result
-        task.wait(0.06)
+        task.wait(0.22)
     end
 
     env.MoonlightHub = { Destroy = Mod.hub.Destroy }
@@ -3602,7 +3799,7 @@ end
 local booted, bootError = pcall(boot)
 if booted then
     task.spawn(Loader.Finish)
-    task.delay(0.3, Mod.hub.Show)
+    task.delay(0.55, Mod.hub.Show)
 else
     warn("[" .. HUB_NAME .. "] failed to start: " .. tostring(bootError))
     emergencyCleanup()
